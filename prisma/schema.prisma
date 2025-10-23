@@ -1,0 +1,17 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")  // 讀 presurg/.env 裡的連線字串
+}
+
+// 先放一個最小模型，打通流程
+model Patient {
+  id        String   @id @default(cuid())
+  mrn       String   @unique
+  name      String
+  dob       DateTime
+  createdAt DateTime @default(now())
+}

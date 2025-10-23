@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -29,9 +27,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
+logs/
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files
+.env
+.env.*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +41,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# editors / caches
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.eslintcache
+.turbo
+
+# prisma (cache)
+.prisma/
+
+# generated (你自訂的輸出位置)
+src/generated/prisma
+
+# docker 本地資料（如果你在 repo 內掛了 volume）
+infra/pgdata/
