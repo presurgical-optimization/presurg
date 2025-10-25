@@ -202,6 +202,8 @@ export default function HomePage() {
             value={birthday}
             onChange={(e) => setBirthday(e.target.value)}
             aria-label="Birthday"
+            min="1900-01-01"
+            max={new Date().toISOString().split('T')[0]} // 今天日期
           />
           <div className="flex gap-2">
             <button
