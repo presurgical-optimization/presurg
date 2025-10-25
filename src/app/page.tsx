@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { z } from "zod";
 
 /** ---------- Schemas & Types ---------- */
@@ -56,6 +57,7 @@ type Surgery = z.infer<typeof SurgerySchema>;
 
 /** ---------- Page ---------- */
 export default function HomePage() {
+  const router = useRouter(); 
   const [ssn, setSsn] = useState("");
   const [birthday, setBirthday] = useState(""); // YYYY-MM-DD
   const [loading, setLoading] = useState(false);
@@ -69,6 +71,7 @@ export default function HomePage() {
   // patient 專用資料（含 guideline.items）
   const [mySurgeries, setMySurgeries] = useState<Surgery[] | null>(null);
 
+  //* ---------- login Handlers ---------- */
   async function login(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -81,12 +84,8 @@ export default function HomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({
-          ssn: ssn.trim(),
-          dob: birthday.trim(),
-        }),
+        body: JSON.stringify({ ssn: ssn.trim(), dob: birthday.trim() }),
       });
-
       const data = await res.json();
 
       if (!res.ok) {
@@ -103,7 +102,15 @@ export default function HomePage() {
         return;
       }
 
-      setMe(parsed.data.user);
+      const user = parsed.data.user;
+      setMe(user);
+
+      // ★ 登入成功 → 依角色導向
+      if (user.role === "patient") {
+        router.push("/patient");
+      } else if (user.role === "doctor") {
+        router.push("/dashboard"); // 之後你要給醫師的頁面
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
       setMe(null);
@@ -127,31 +134,6 @@ export default function HomePage() {
     }
   }
 
-  // doctor: 列出所有病患
-  async function loadPatients() {
-    setLoading(true);
-    setError(null);
-    setPatients(null);
-    try {
-      const res = await fetch("/api/patients", { credentials: "include", cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) {
-        const maybeErr = ApiErrorSchema.safeParse(data);
-        setError(maybeErr.success ? maybeErr.data.error : `HTTP ${res.status}`);
-        return;
-      }
-      const arr = z.object({ patients: z.array(PatientSummarySchema) }).safeParse(data);
-      if (!arr.success) {
-        setError("Unexpected patients response");
-        return;
-      }
-      setPatients(arr.data.patients);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Network error");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   // patient: 讀取自己的手術（含 guideline.items）
   async function loadMySurgeries() {
@@ -241,33 +223,6 @@ export default function HomePage() {
           <p className="text-sm text-neutral-600">Not logged in</p>
         )}
 
-        {/* Role-specific actions */}
-        {me?.role === "doctor" && (
-          <div className="space-y-3">
-            <h2 className="text-lg font-semibold">Doctor Tools</h2>
-            <button
-              onClick={loadPatients}
-              disabled={loading}
-              className="bg-emerald-600 text-white py-2 px-4 rounded disabled:opacity-60"
-            >
-              {loading ? "Loading..." : "Load All Patients"}
-            </button>
-
-            {patients && (
-              <div className="border rounded p-4 space-y-2">
-                <h3 className="font-medium">Patients ({patients.length})</h3>
-                <ul className="list-disc pl-5">
-                  {patients.map((p) => (
-                    <li key={p.id}>
-                      {p.name} — DOB: {new Date(p.dob).toLocaleDateString()} (#{p.id})
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-
         {me?.role === "patient" && (
           <div className="space-y-3">
             <h2 className="text-lg font-semibold">My Surgeries</h2>
@@ -278,55 +233,6 @@ export default function HomePage() {
             >
               {loading ? "Loading..." : "Load My Surgeries"}
             </button>
-
-            {mySurgeries && (
-              <div className="border rounded p-4 space-y-4">
-                <h3 className="font-medium">Surgeries ({mySurgeries.length})</h3>
-                <ul className="space-y-4">
-                  {mySurgeries.map((s) => (
-                    <li key={s.id} className="space-y-2">
-                      <div className="font-medium">
-                        {s.status}
-                        {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
-                        {s.location ? ` — ${s.location}` : ""}
-                        {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
-                      </div>
-
-                      {/* Guideline + Items */}
-                      {s.guideline ? (
-                        <div className="rounded border p-3">
-                          <div className="font-semibold">Guideline: {s.guideline.name}</div>
-                          {s.guideline.items.length > 0 ? (
-                            <ul className="mt-2 space-y-2">
-                              {s.guideline.items.map((gi) => (
-                                <li key={gi.id} className="border rounded p-2">
-                                  <div className="font-medium">
-                                    {gi.title}
-                                    {gi.itemKey ? (
-                                      <span className="ml-2 text-xs text-neutral-500">({gi.itemKey})</span>
-                                    ) : null}
-                                  </div>
-                                  {gi.description ? (
-                                    <div className="text-sm text-neutral-700">{gi.description}</div>
-                                  ) : null}
-                                  <div className="text-xs text-neutral-500">
-                                    {gi.type ? `type: ${gi.type}` : ""}
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <div className="text-sm text-neutral-600 mt-1">No items in this guideline.</div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-neutral-600">No guideline attached.</div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
         )}
       </div>
