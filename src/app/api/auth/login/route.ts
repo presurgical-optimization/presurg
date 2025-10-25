@@ -14,6 +14,6 @@ export async function POST(req: Request) {
 
   const sid = createSession({ userId: user.id, role: user.role });
   const res = NextResponse.json({ user });
-  res.cookies.set("sid", sid, { httpOnly: true, sameSite: "lax", secure: true, path: "/" });
+  res.cookies.set("sid", sid, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
   return res;
 }

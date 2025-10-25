@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
       include: { _count: { select: { items: true, surgeries: true } } },
     });
     return NextResponse.json(
-      rows.map((g) => ({
+      rows.map((g: { id: string; name: string; description: string | null; createdAt: Date; _count: { items: number; surgeries: number } }) => ({
         id: g.id,
         name: g.name,
         description: g.description,
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   });
 
   return NextResponse.json(
-    rows.map((g) => ({
+    rows.map((g: { id: string; name: string; description: string | null; createdAt: Date; _count: { items: number; surgeries: number } }) => ({
       id: g.id,
       name: g.name,
       description: g.description,
