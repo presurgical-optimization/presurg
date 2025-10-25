@@ -8,19 +8,33 @@ export async function GET() {
     const surgeries = await prisma.surgery.findMany({
       where: { patientId: s.userId },
       include: {
-        guideline: { select: { id: true, name: true } },
+        guideline: {
+          select: {
+            id: true,
+            name: true,
+            // ★ 加上 items
+            items: {
+              select: {
+                id: true,
+                title: true,
+                description: true,
+                itemKey: true,
+                type: true,
+                window: true,
+                appliesIf: true,
+              },
+              orderBy: { id: "asc" },
+            },
+          },
+        },
         doctor: { select: { id: true, name: true } },
-        currentPublishedVersion: { 
-          select: { 
-            id: true, 
-            versionNo: true, 
-            status: true, 
-            publishedAt: true 
-          } 
+        currentPublishedVersion: {
+          select: { id: true, versionNo: true, status: true, publishedAt: true },
         },
       },
       orderBy: { scheduledAt: "asc" },
     });
+
     return NextResponse.json({ surgeries });
   } catch (error: unknown) {
     if (error instanceof Error) {

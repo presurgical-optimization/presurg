@@ -24,13 +24,33 @@ const PatientSummarySchema = z.object({
 });
 type PatientSummary = z.infer<typeof PatientSummarySchema>;
 
+// ★ GuidelineItem schema：顯示在病患的手術下面
+const GuidelineItemSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  itemKey: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  window: z.any().nullable().optional(),    // 後端是 JSONB，這裡用 any 直接顯示
+  appliesIf: z.any().nullable().optional(), // 同上
+});
+type GuidelineItem = z.infer<typeof GuidelineItemSchema>;
+
+// ★ Surgery schema：guideline 內含 items（不含 version）
 const SurgerySchema = z.object({
   id: z.number(),
   scheduledAt: z.string().nullable().optional(),
   location: z.string().nullable().optional(),
   status: z.string(),
   doctor: z.object({ id: z.number(), name: z.string() }).optional(),
-  guideline: z.object({ id: z.number(), name: z.string() }).nullable().optional(),
+  guideline: z
+    .object({
+      id: z.number(),
+      name: z.string(),
+      items: z.array(GuidelineItemSchema),
+    })
+    .nullable()
+    .optional(),
 });
 type Surgery = z.infer<typeof SurgerySchema>;
 
@@ -46,7 +66,7 @@ export default function HomePage() {
   // doctor 專用資料
   const [patients, setPatients] = useState<PatientSummary[] | null>(null);
 
-  // patient 專用資料
+  // patient 專用資料（含 guideline.items）
   const [mySurgeries, setMySurgeries] = useState<Surgery[] | null>(null);
 
   async function login(e: React.FormEvent) {
@@ -60,11 +80,10 @@ export default function HomePage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // 後端是 cookie session，client fetch 同網域會自帶 cookie；保險起見附上：
         credentials: "include",
         body: JSON.stringify({
           ssn: ssn.trim(),
-          dob: birthday.trim(), // 建議 YYYY-MM-DD；若你後端有做 19800312 轉換也可
+          dob: birthday.trim(),
         }),
       });
 
@@ -97,10 +116,7 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-        credentials: "include",
-      });
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
       setMe(null);
       setPatients(null);
       setMySurgeries(null);
@@ -124,7 +140,6 @@ export default function HomePage() {
         setError(maybeErr.success ? maybeErr.data.error : `HTTP ${res.status}`);
         return;
       }
-      // 後端回傳 { patients: [...] }
       const arr = z.object({ patients: z.array(PatientSummarySchema) }).safeParse(data);
       if (!arr.success) {
         setError("Unexpected patients response");
@@ -138,20 +153,21 @@ export default function HomePage() {
     }
   }
 
-  // patient: 讀取自己的手術
+  // patient: 讀取自己的手術（含 guideline.items）
   async function loadMySurgeries() {
     setLoading(true);
     setError(null);
     setMySurgeries(null);
     try {
-      const res = await fetch("/api/me/surgeries", { credentials: "include", cache: "no-store" });
+      // ★ 這裡改成 /api/me/surgeries（病患自己的手術）
+      const res = await fetch("/api/patients/surgeries", { credentials: "include", cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         const maybeErr = ApiErrorSchema.safeParse(data);
         setError(maybeErr.success ? maybeErr.data.error : `HTTP ${res.status}`);
         return;
       }
-      // 後端回傳 { surgeries: [...] }
+      // 後端需回傳 guideline: { id, name, items: [...] }
       const arr = z.object({ surgeries: z.array(SurgerySchema) }).safeParse(data);
       if (!arr.success) {
         setError("Unexpected surgeries response");
@@ -262,16 +278,48 @@ export default function HomePage() {
             </button>
 
             {mySurgeries && (
-              <div className="border rounded p-4 space-y-2">
+              <div className="border rounded p-4 space-y-4">
                 <h3 className="font-medium">Surgeries ({mySurgeries.length})</h3>
-                <ul className="list-disc pl-5">
+                <ul className="space-y-4">
                   {mySurgeries.map((s) => (
-                    <li key={s.id}>
-                      {s.status}
-                      {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
-                      {s.location ? ` — ${s.location}` : ""}
-                      {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
-                      {s.guideline ? ` — Guideline: ${s.guideline.name}` : ""}
+                    <li key={s.id} className="space-y-2">
+                      <div className="font-medium">
+                        {s.status}
+                        {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
+                        {s.location ? ` — ${s.location}` : ""}
+                        {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
+                      </div>
+
+                      {/* Guideline + Items */}
+                      {s.guideline ? (
+                        <div className="rounded border p-3">
+                          <div className="font-semibold">Guideline: {s.guideline.name}</div>
+                          {s.guideline.items.length > 0 ? (
+                            <ul className="mt-2 space-y-2">
+                              {s.guideline.items.map((gi) => (
+                                <li key={gi.id} className="border rounded p-2">
+                                  <div className="font-medium">
+                                    {gi.title}
+                                    {gi.itemKey ? (
+                                      <span className="ml-2 text-xs text-neutral-500">({gi.itemKey})</span>
+                                    ) : null}
+                                  </div>
+                                  {gi.description ? (
+                                    <div className="text-sm text-neutral-700">{gi.description}</div>
+                                  ) : null}
+                                  <div className="text-xs text-neutral-500">
+                                    {gi.type ? `type: ${gi.type}` : ""}
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <div className="text-sm text-neutral-600 mt-1">No items in this guideline.</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-neutral-600">No guideline attached.</div>
+                      )}
                     </li>
                   ))}
                 </ul>
