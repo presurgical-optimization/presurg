@@ -1,103 +1,99 @@
 // app/api/patients/surgeries/route.ts
 import { NextResponse } from "next/server";
+import { requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { readSession } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-// 依你的實際 instructions 結構調整這個 helper：
-// 假設 SurgeryPlanVersion.instructions 是 JSONB，形如：
-// { items: [{ id, title, description, itemKey, type, window, appliesIf }, ...] }
-function extractItemsFromInstructions(instructions: any) {
-  if (!instructions) return [];
-  // 常見設計：instructions.items 是完整清單；若你只想回「藥物指示」，可在此 filter
-  const items = Array.isArray(instructions?.items) ? instructions.items : [];
-  return items.map((it: any) => ({
-    id: Number(it?.id ?? 0),                   // 若後端沒 id，可用遞增或 versionId*1e6+idx
-    title: String(it?.title ?? "Untitled"),
-    description: it?.description ?? null,
-    itemKey: it?.itemKey ?? null,
-    type: it?.type ?? null,
-    window: it?.window ?? null,
-    appliesIf: it?.appliesIf ?? null,
-  }));
-}
+// 你給的 instructions 是一個 JSON 陣列：
+// [
+//   {
+//     "type":"medication",
+//     "title":"Acetaminophen",
+//     "dosage":"325-650 mg PR q4-6hr PRN ...",
+//     "window":{"from":"D-4","until":"postop-stable"},
+//     "enabled":true,
+//     "itemKey":"med-sglt2i-hold",
+//     "max_dose":"Not to exceed 4 g/day (Adults)",
+//     "orderIndex":10,
+//     "description":"Non-opioid analgesic ...",
+//     "indications":[...],
+//     "dosage_adjustment":{...},
+//     "administration_note":"..."
+//   }
+// ]
+//
+// 前端目前的 GuidelineItemSchema 只有：
+// { id, title, description, itemKey, type, window, appliesIf }
+// 所以這裡先最小映射；其它欄位（如 dosage/max_dose/indications）先略過，
+// 之後若前端要顯示，再擴 schema。
 
 export async function GET() {
-  // 1) 驗證 session
-  const s = await readSession();
-  if (!s || s.role !== "patient") {
-    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
-  }
+  try {
+    const s = await requireRole(["patient"]);
 
-  // 2) 先查該病患的手術，取出 versionId 與需要的顯示欄位
-  const surgeries = await prisma.surgery.findMany({
-    where: { patientId: s.userId },
-    select: {
-      id: true,
-      scheduledAt: true,
-      location: true,
-      status: true,
-      doctor: { select: { id: true, name: true } },
-      currentPublishedVersionId: true,
-    },
-    orderBy: { scheduledAt: "asc" },
-  });
-
-  if (surgeries.length === 0) {
-    return NextResponse.json({ surgeries: [] });
-  }
-
-  // 3) 收集 versionIds → 查版本（取 versionNo 與 instructions）
-  const versionIds = surgeries
-    .map((r) => r.currentPublishedVersionId)
-    .filter((id): id is number => id !== null);
-
-  const versions = versionIds.length
-    ? await prisma.surgeryPlanVersion.findMany({
-        where: { id: { in: versionIds } },
-        select: {
-          id: true,
-          versionNo: true,        // 方便組一個名稱
-          instructions: true,     // JSONB
-          status: true,           // 如果你要顯示也可帶
-          publishedAt: true,      // 如果你要顯示也可帶
+    const rows = await prisma.surgery.findMany({
+      where: { patientId: s.userId },
+      select: {
+        id: true,
+        scheduledAt: true,
+        location: true,
+        status: true,
+        doctor: { select: { id: true, name: true } },
+        currentPublishedVersion: {
+          select: {
+            id: true,
+            versionNo: true,
+            instructions: true, // JSONB（期待為陣列）
+          },
         },
-      })
-    : [];
+      },
+      orderBy: { scheduledAt: "asc" },
+    });
 
-  // 4) 做一個快取 map，方便 O(1) 取版本
-  const versionMap = new Map<number, (typeof versions)[number]>();
-  for (const v of versions) versionMap.set(v.id, v);
+    const surgeries = rows.map((r) => {
+      const v = r.currentPublishedVersion;
+      // 將 instructions 陣列 → guideline.items
+      const items = Array.isArray(v?.instructions)
+        ? v!.instructions.map((it: any, idx: number) => ({
+            // 若沒有穩定 id，就用 (versionId * 1e6 + idx) 造一個
+            id: Number(it?.id ?? (v!.id * 1_000_000 + idx)),
+            title: String(it?.title ?? "Untitled"),
+            description: it?.description ?? null,
+            itemKey: it?.itemKey ?? null,
+            type: it?.type ?? null,
+            window: it?.window ?? null,
+            appliesIf: it?.appliesIf ?? null,
+          }))
+        : [];
 
-  // 5) 組裝回傳資料（把 version → guideline）
-  const out = surgeries.map((surg) => {
-    const v = surg.currentPublishedVersionId
-      ? versionMap.get(surg.currentPublishedVersionId)
-      : undefined;
+      return {
+        id: r.id,
+        scheduledAt: r.scheduledAt,
+        location: r.location,
+        status: r.status,
+        doctor: r.doctor ?? undefined,
+        guideline: v
+          ? {
+              id: v.id,
+              name: `Current Plan v${v.versionNo ?? "?"}`,
+              items,
+            }
+          : null,
+      };
+    });
 
-    const items = v ? extractItemsFromInstructions(v.instructions) : [];
-
-    return {
-      id: surg.id,
-      scheduledAt: surg.scheduledAt,
-      location: surg.location,
-      status: surg.status,
-      doctor: surg.doctor ?? undefined,
-      // 讓前端沿用你既有的 schema：guideline: { id, name, items }
-      guideline: v
-        ? {
-            id: v.id,
-            name: `Current Plan v${v.versionNo ?? "?"}`, // 想顯示成別的名稱可自訂
-            items,
-          }
-        : null,
-      // 如果你還想把版本資訊另行提供，也可以加一段 meta：
-      // currentPublishedVersion: v
-      //   ? { id: v.id, versionNo: v.versionNo, status: v.status, publishedAt: v.publishedAt }
-      //   : null,
-    };
-  });
-
-  return NextResponse.json({ surgeries: out });
+    return NextResponse.json({ surgeries });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      if (error.message === "UNAUTHORIZED") {
+        return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
+      }
+      if (error.message === "FORBIDDEN") {
+        return NextResponse.json({ error: "FORBIDDEN" }, { status: 403 });
+      }
+    }
+    console.error("Unexpected error:", error);
+    return NextResponse.json({ error: "SERVER_ERROR" }, { status: 500 });
+  }
 }

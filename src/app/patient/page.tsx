@@ -1,78 +1,171 @@
-// app/api/patients/surgeries/route.ts
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { readSession } from "@/lib/auth";
+// app/patient/page.tsx
+"use client";
+import DrugRecognitionLauncher from "./DrugRecognitionLauncher";
+import { useEffect, useState } from "react";
+import { z } from "zod";
 
-export const runtime = "nodejs";
+const GuidelineItemSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  itemKey: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  window: z.any().nullable().optional(),
+  appliesIf: z.any().nullable().optional(),
+});
 
-// 依你的 instructions 結構調整這個 helper
-function extractItemsFromInstructions(instructions: any) {
-  // 假設 instructions = { items: [...] }
-  const arr = Array.isArray(instructions?.items) ? instructions.items : [];
-  return arr.map((it: any, idx: number) => ({
-    // 若 JSON 裡沒有 id，就造一個穩定 id（例如 idx 或 (versionId*1e6 + idx)）
-    id: typeof it?.id === "number" ? it.id : idx,
-    title: String(it?.title ?? "Untitled"),
-    description: it?.description ?? null,
-    itemKey: it?.itemKey ?? null,
-    type: it?.type ?? null,
-    window: it?.window ?? null,
-    appliesIf: it?.appliesIf ?? null,
-  }));
-}
+const SurgerySchema = z.object({
+  id: z.number(),
+  scheduledAt: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  status: z.string(),
+  doctor: z.object({ id: z.number(), name: z.string() }).optional(),
+  guideline: z.object({
+    id: z.number(),
+    name: z.string(),
+    items: z.array(GuidelineItemSchema),
+  }).nullable().optional(),
+});
+const ResponseSchema = z.object({ surgeries: z.array(SurgerySchema) });
+type Surgery = z.infer<typeof SurgerySchema>;
 
-export async function GET() {
-  const s = await readSession();
-  if (!s || s.role !== "patient") {
-    return NextResponse.json({ error: "UNAUTHORIZED" }, { status: 401 });
-  }
+const MeSchema = z.object({
+  user: z.object({
+    id: z.number(),
+    name: z.string(),
+    role: z.enum(["doctor", "patient"]),
+  }),
+});
+type Me = z.infer<typeof MeSchema>["user"];
 
-  // ✅ 只選需要的欄位，包含 JSONB：instructions
-  const rows = await prisma.surgery.findMany({
-    where: { patientId: s.userId },
-    select: {
-      id: true,
-      scheduledAt: true,
-      location: true,
-      status: true,
-      doctor: { select: { id: true, name: true } },
-      currentPublishedVersion: {
-        select: {
-          id: true,
-          versionNo: true,
-          status: true,
-          publishedAt: true,
-          instructions: true, // ← 關鍵：把 JSON 撈回來
-        },
-      },
-    },
-    orderBy: { scheduledAt: "asc" },
-  });
+export default function PatientPage() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [surgeries, setSurgeries] = useState<Surgery[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
 
-  // ✅ 在 JS 端把 JSON 組成前端想要的 guideline.items
-  const surgeries = rows.map((r) => {
-    const v = r.currentPublishedVersion;
-    const items = v ? extractItemsFromInstructions(v.instructions) : [];
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // 1) 取得目前登入者
+        const meRes = await fetch("/api/auth/me", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!meRes.ok) {
+          let msg = `HTTP ${meRes.status}`;
+          try {
+            const j = await meRes.json();
+            if (j?.error) msg = j.error;
+          } catch {}
+          throw new Error(msg);
+        }
+        const meData = await meRes.json();
+        const meParsed = MeSchema.safeParse(meData);
+        if (!meParsed.success) throw new Error("Unexpected me response");
+        if (mounted) setMe(meParsed.data.user);
 
-    return {
-      id: r.id,
-      scheduledAt: r.scheduledAt,
-      location: r.location,
-      status: r.status,
-      doctor: r.doctor ?? undefined,
-      guideline: v
-        ? {
-            id: v.id,
-            name: `Current Plan v${v.versionNo ?? "?"}`,
-            items, // ← 這裡就是從 instructions 映出來的 items
-          }
-        : null,
-      // 如果前端還需要版本資訊，可以加一段 meta：
-      // currentPublishedVersion: v
-      //   ? { id: v.id, versionNo: v.versionNo, status: v.status, publishedAt: v.publishedAt }
-      //   : null,
+        // 2) 取得病患手術
+        const res = await fetch("/api/patients/surgeries", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.error) msg = j.error;
+          } catch {}
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        const parsed = ResponseSchema.safeParse(data);
+        if (!parsed.success) throw new Error("Unexpected surgeries response");
+        if (mounted) setSurgeries(parsed.data.surgeries);
+      } catch (e) {
+        if (mounted) setError(e instanceof Error ? e.message : "Network error");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
     };
-  });
+  }, []);
 
-  return NextResponse.json({ surgeries });
+  return (
+    <main className="min-h-svh grid place-items-center p-6">
+      <div className="w-full max-w-2xl space-y-4">
+        <h1 className="text-2xl font-semibold">My Surgeries</h1>
+
+        {loading && <div className="text-sm text-neutral-600">Loading…</div>}
+        {error && <div className="text-sm text-red-600">❌ {error}</div>}
+
+        {!loading && !error && (
+          <div className="border rounded p-4 space-y-4">
+            <h3 className="font-medium">Surgeries ({surgeries.length})</h3>
+
+            {surgeries.length === 0 ? (
+              <div className="text-sm text-neutral-600">No surgeries yet.</div>
+            ) : (
+              <ul className="space-y-4">
+                {surgeries.map((s) => (
+                  <li key={s.id} className="space-y-2">
+                    <div className="font-medium">
+                      {s.status}
+                      {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
+                      {s.location ? ` — ${s.location}` : ""}
+                      {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
+                    </div>
+
+                    {s.guideline ? (
+                      <div className="rounded border p-3">
+                        <div className="font-semibold">
+                          Guideline: {s.guideline.name}{" "}
+                          <span className="text-xs text-neutral-500">#{s.guideline.id}</span>
+                        </div>
+
+                        {s.guideline.items.length > 0 ? (
+                          <ul className="mt-2 space-y-2">
+                            {s.guideline.items.map((gi) => (
+                              <li key={gi.id} className="border rounded p-2">
+                                <div className="font-medium">
+                                  {gi.title}
+                                  {gi.itemKey ? (
+                                    <span className="ml-2 text-xs text-neutral-500">({gi.itemKey})</span>
+                                  ) : null}
+                                </div>
+                                {gi.description ? (
+                                  <div className="text-sm text-neutral-700">{gi.description}</div>
+                                ) : null}
+                                <div className="text-xs text-neutral-500">
+                                  {gi.type ? `type: ${gi.type}` : ""}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="text-sm text-neutral-600 mt-1">
+                            No items in this guideline.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-neutral-600">No guideline attached.</div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 等 me 載好再掛子元件，避免 undefined */}
+      {me && <DrugRecognitionLauncher userId={me.id} />}
+    </main>
+  );
 }
