@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react"; //Add useEffect -E
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 
@@ -29,7 +29,9 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null);
 
 
-  //* ---------- login Handlers ---------- */
+  // patient 專用資料（含 guideline.items）
+  const [mySurgeries, setMySurgeries] = useState<Surgery[] | null>(null);
+
   async function login(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
