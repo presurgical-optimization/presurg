@@ -80,7 +80,7 @@ export default function HomePage() {
   return (
     <main className="min-h-svh grid place-items-center p-6">
       <div className="w-full max-w-2xl space-y-6">
-        <h1 className="text-2xl font-semibold">Auth + Role Demo</h1>
+        <h1 className="text-2xl font-semibold">Welcome!</h1>
 
         {/* Login form */}
         <form onSubmit={login} className="flex flex-col gap-3">
@@ -105,17 +105,10 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={loading || ssn.trim() === "" || birthday.trim() === ""}
-              className="bg-blue-600 text-white py-2 px-4 rounded disabled:opacity-60"
+              style={{ backgroundColor: "rgb(29, 76, 111)" }}
+              className="text-white py-2 px-4 rounded disabled:opacity-60 hover:opacity-90 transition"
             >
               {loading ? "Logging in..." : "Login"}
-            </button>
-            <button
-              type="button"
-              // onClick={logout}
-              // disabled={loading || !me}
-              className="bg-neutral-700 text-white py-2 px-4 rounded disabled:opacity-60"
-            >
-              Logout
             </button>
           </div>
         </form>
