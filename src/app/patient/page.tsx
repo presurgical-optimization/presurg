@@ -177,14 +177,35 @@ export default function PatientPage() {
       )}
 
       {/* Main */}
-      <main className="grid place-items-center p-6">
+      {/* <main className="grid place-items-center p-6"> */}
+      <main className=" p-6 mx-auto">
+        <div className="w-full max-w-5xl mx-auto space-y-4">
+          <h1 className="text-2xl font-semibold text-center mb-6">My Surgeries</h1>
+        </div>
         <div className="w-full max-w-2xl space-y-4">
-          <h1 className="text-2xl font-semibold">My Surgeries</h1>
 
-          {loading && <div className="text-sm text-neutral-600">Loading…</div>}
+          {/* 1. 左側：Notification/Sidebar (定位在第一欄) */}
+          <div className="flex gap-6 justify-start items-start">
+            <div className="w-200 bg-white p-4 rounded-xl shadow border border-gray-200">
+              <h2 className="text-xl font-bold mb-4 border-b pb-2 text-gray-800 text-center">
+                Notifications
+              </h2>
+              {/* 這裡可以放通知列表的內容 */}
+              <div className="space-y-3">
+                <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+                  **今日提醒：** 您的術前準備已更新。
+                </div>
+              </div>
+          </div>
+          </div>
+          
+
+        
+          {loading && 
+            <div className="text-sm text-neutral-600 mx-auto text-center">Loading…</div>}
 
           {!loading && !error && (
-            <div className="border rounded p-4 space-y-4">
+            <div className="border rounded p-4 space-y-4 mx-auto max-w-2xl text-center">
               <h3 className="font-medium">Surgeries ({surgeries.length})</h3>
 
               {surgeries.length === 0 ? (
@@ -197,7 +218,7 @@ export default function PatientPage() {
                         {s.status}
                         {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
                         {s.location ? ` — ${s.location}` : ""}
-                        {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
+                        {s.doctor ? ` — ${s.doctor.name}` : ""}
                       </div>
 
                       {/* Guideline + Items */}
@@ -249,10 +270,10 @@ export default function PatientPage() {
             </div>
           )}
         </div>
-
         {/* 等 me 載好再掛子元件，避免 undefined */}
         {me && <DrugRecognitionLauncher userId={me.id} />}
       </main>
     </div>
-  );
+);
+
 }
