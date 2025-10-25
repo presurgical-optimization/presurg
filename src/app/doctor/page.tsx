@@ -1,3 +1,4 @@
+// api
 "use client";
 
 import React, { useState } from 'react';
@@ -33,10 +34,35 @@ const patientList = [
     ]
   },
   // 為了簡化，其他病人可以只提供基礎數據
-  { id: 2, name: "Patient 2", mrn: "P002", patient_id: "123456", dob: "1995/05/20", status: "Optimization Complete", note: "無特殊問題，已準備手術。", surgeries: [] },
+  { id: 2, name: "Patient 2", mrn: "P002", patient_id: "123456", dob: "1995/05/20", status: "Optimization Complete", note: "無特殊問題，已準備手術。", surgeries: [
+    { 
+        index: 1, date: "10/10/2025 10:00", name: "Appendectomy", 
+        definition: "Surgical removal of the appendix, usually performed to treat acute appendicitis.",
+        details: [
+          "Fasting: The patient should fast for at least 6–8 hours before surgery (no food or drink).",
+          "Allergies: Check for any drug allergies, especially to antibiotics or anesthetics.",
+          "Informed Consent: Explain the surgical procedure, possible risks, and obtain written consent.",
+          "Bowel Preparation: Usually not required for uncomplicated appendectomy, but may be considered for laparoscopic procedures.",
+          "IV Access: Establish intravenous line for fluids and medications.",
+          "Preoperative Antibiotics: Administer broad-spectrum antibiotics (e.g., ceftriaxone + metronidazole) to reduce infection risk.",
+          "Vital Signs and Assessment: Record baseline temperature, blood pressure, heart rate, and pain level."
+        ]
+      },
+      { index: 2, date: "10/20/2025 12:00", name: "Hysterectomy", definition: "Removal of the gallbladder.", details: ["Fasting: 8 hours", "Informed Consent: Done"] },
+      { index: 3, date: "12/19/2025 15:00", name: "Carotid Endarterectomy", definition: "Minimally invasive knee surgery.", details: ["Fasting: 6 hours", "Consent: Done", "Pre-Op Check: Complete"] },
+    
+  ] },
   { id: 3, name: "Patient 3", mrn: "P003", patient_id: "123457", dob: "1972/11/05", status: "Waiting for Lab", note: "等待 INR 報告。", surgeries: [] },
   { id: 4, name: "Patient 4", mrn: "P004", patient_id: "123458", dob: "2000/03/10", status: "Initial Intake", note: "新病人，資料待補齊。", surgeries: [] },
 ];
+
+// 【模擬的歷史版本數據】
+const historyVersions = [
+    { version: 1, date: "2025/10/01 09:30", editor: "Dr. Chen", content: "Record baseline temperature, blood pressure, heart rate, and pain level. (Initial Draft)" },
+    { version: 2, date: "2025/10/05 14:00", editor: "Dr. Huang", content: "Record baseline temperature, blood pressure, heart rate, and pain level. **Note:** Check for pre-existing low blood pressure." },
+    { version: 3, date: "2025/10/09 08:00", editor: "Dr. Wang", content: "Record baseline temperature, blood pressure, heart rate, and pain level. **Final Check:** ECG results are normal." },
+];
+
 // const patientList = [
 //   { id: 1, name: "Patient 1", mrn: "P001", dob: "1980/01/15", status: "Pre-Op Check", note: "高血壓史，需確認麻醉評估。" },
 //   { id: 2, name: "Patient 2", mrn: "P002", dob: "1995/05/20", status: "Optimization Complete", note: "無特殊問題，已準備手術。" },
@@ -191,8 +217,98 @@ export default function DoctorViewPage() {
   );
 }
 
-// 【新增組件：可編輯的表格行】
-const EditableRow = ({columnName, initialValue, isSurgeryName = false}) => {
+// 【新增組件：歷史版本彈窗】
+const HistoryModal = ({ versions, onClose }) => {
+    // 追蹤目前顯示的版本索引 (從 0 開始)
+    const [currentPage, setCurrentPage] = useState(0); 
+    const currentVersion = versions[currentPage];
+    const totalPages = versions.length;
+
+    const goToNext = () => {
+        if (currentPage < totalPages - 1) {
+            setCurrentPage(currentPage + 1);
+        }
+    };
+
+    const goToPrev = () => {
+        if (currentPage > 0) {
+            setCurrentPage(currentPage - 1);
+        }
+    };
+
+    if (totalPages === 0) {
+        return null;
+    }
+
+
+    return (
+        // 外部容器，用於背景和居中
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col">
+                
+                {/* 彈窗標題 */}
+                <h3 className="text-2xl font-bold mb-4 border-b pb-2 text-gray-800">
+                    Version History: Vital Signs and Assessment
+                </h3>
+
+                {/* 版本內容 */}
+                <div className="flex-grow overflow-y-auto p-4 border rounded-lg bg-gray-50 mb-4">
+                    <p className="text-lg font-semibold mb-2">
+                        Version {currentVersion.version} / {totalPages}
+                    </p>
+                    <p className="text-sm text-gray-500 mb-4">
+                        Edited by {currentVersion.editor} on {currentVersion.date}
+                    </p>
+                    <div className="text-gray-700 whitespace-pre-wrap border p-4 bg-white rounded-md min-h-[150px]">
+                        {currentVersion.content}
+                    </div>
+                </div>
+
+                {/* 底部控制區：關閉與分頁 */}
+                <div className="flex justify-between items-center pt-2">
+                    {/* 左側：關閉按鈕 */}
+                    <button 
+                        onClick={onClose} 
+                        className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-700"
+                    >
+                        Close
+                    </button>
+
+                    {/* 右側：分頁控制 */}
+                    <div className="flex items-center space-x-2">
+                        {/* 上一頁按鈕 */}
+                        <button 
+                            onClick={goToPrev} 
+                            disabled={currentPage === 0}
+                            className={`px-4 py-2 rounded transition-colors ${
+                                currentPage === 0 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-400 text-white hover:bg-blue-900'
+                            }`}
+                        >
+                            Prev Ver.
+                        </button>
+                        
+                        {/* 下一頁按鈕 */}
+                        {/* 只有當有多於一個版本時才顯示，並在最後一頁時禁用 */}
+                        {totalPages > 1 && (
+                            <button 
+                                onClick={goToNext} 
+                                disabled={currentPage === totalPages - 1}
+                                className={`px-4 py-2 rounded transition-colors ${
+                                    currentPage === totalPages - 1 ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-400 text-white hover:bg-blue-900'
+                                }`}
+                            >
+                                Next Ver.
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 【可編輯的表格行】
+const EditableRow = ({columnName, initialValue, isSurgeryName = false, isVitalSignsRow = false, onViewHistory}) => {
     // state: 追蹤該行是否處於編輯模式 (true: 顯示輸入框; false: 顯示文字)
     const [isEditing, setIsEditing] = useState(false)
     // state：儲存用戶在編輯模式下輸入的值。初始值為傳入的 initialValue
@@ -254,7 +370,8 @@ const EditableRow = ({columnName, initialValue, isSurgeryName = false}) => {
             </div>
 
             {/* 3. 動作按鈕 (Action) - 約 10% 寬度，固定不縮 (flex-[0_0_10%])，推到最右 */}
-            <div className="flex-[0_0_10%] flex justify-end pt-1">
+            {/* <div className="flex-[0_0_10%] flex flex-col justify-start items-end pt-1 space-y-2"> */}
+            <div className="w-16 flex flex-col justify-start items-end pt-1 space-y-2">
                 {isEditing ? (
                     <button 
                         onClick={handleSave} 
@@ -269,6 +386,22 @@ const EditableRow = ({columnName, initialValue, isSurgeryName = false}) => {
                     >
                         Edit
                     </button>
+                )}
+
+                {/* 【新增 History 按鈕的邏輯】 */}
+                {isVitalSignsRow && !isEditing && (
+                    <button 
+                    onClick={onViewHistory} 
+                    // 類別保持 Edit 按鈕的大小和形狀
+                    className="text-white border text-xs px-1 py-1 rounded transition-colors"
+                        style={{
+                            // 保持深藍色背景
+                            backgroundColor: 'grey',
+                            boxShadow: 'none',
+                        }}
+                >
+                    History
+                </button>
                 )}
             </div>
         </div>
@@ -303,17 +436,26 @@ const EditableRow = ({columnName, initialValue, isSurgeryName = false}) => {
   );
 }
 
-// 【新增組件：可展開的手術表格】
+// 【可展開的手術表格】
 const SurgeryTable = ({ surgeries }) => {
   const [expandedIndex, setExpandedIndex] = useState(null);
+  // 控制歷史彈窗的開啟與關閉
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
 
   const toggleDetails = (index) => {
     setExpandedIndex(expandedIndex === index ? null : index);
   };
 
+  // 開啟歷史版本彈窗
+  const handleViewHistory = () => {
+      // 這裡可以根據手術/欄位 ID 獲取真實的歷史數據
+      setIsHistoryOpen(true);
+  };
+
   return (
     <div className="mt-8 text-base">
       {/* 匹配您的圖片樣式：Table 位於左上角 */}
+      {isHistoryOpen && <HistoryModal versions={historyVersions} onClose={() => setIsHistoryOpen(false)} />}
       <div className="text-sm font-light mb-2 text-gray-500">Table</div>
 
       <table className="min-w-full divide-y divide-gray-200 border-t border-gray-200">
@@ -389,12 +531,16 @@ const SurgeryTable = ({ surgeries }) => {
                             
                             // 【修改點 4】：調整編號，從 4. 開始
                             const numberedTitle = `${detailIndex + 4}. ${title}`;
+
+                            const isVitalSigns = detailIndex + 4 === 10;  // 判斷是否為目標行
                             
                             return (
                                 <EditableRow    
                                     key={detailIndex}
                                     columnName={numberedTitle} // 使用 columnName
                                     initialValue={content.trim()} // 清理內容前的空白
+                                    isVitalSignsRow={isVitalSigns} 
+                                    onViewHistory={handleViewHistory}
                                     />
                             );
                         })}
