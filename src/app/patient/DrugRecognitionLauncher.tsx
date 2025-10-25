@@ -80,10 +80,12 @@ export default function DrugRecognitionLauncher({ userId }: { userId: number }) 
       }
 
       setApiResp(data as ApiResponse);
-    } catch (err: any) {
-      setApiError(err?.message || "上傳失敗");
+    } catch (err: unknown) {
+        const message =
+            err instanceof Error ? err.message : "上傳失敗";
+        setApiError(message);
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
   }
 

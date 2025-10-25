@@ -1,151 +1,171 @@
-"use client"; // 标记为客户端组件以使用 useState
+// app/patient/page.tsx
+"use client";
 import DrugRecognitionLauncher from "./DrugRecognitionLauncher";
-import React, { useState } from 'react';
-import { User, X, Calendar, MapPin, Tag, Pill } from 'lucide-react'; // 圖示
-const PRIMARY_COLOR = '#1D4C6F';
+import { useEffect, useState } from "react";
+import { z } from "zod";
 
-export default function PresurgicalOptimizationPage() {
-  // 状态：用于控制下拉菜单的显示/隐藏
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
+const GuidelineItemSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  itemKey: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  window: z.any().nullable().optional(),
+  appliesIf: z.any().nullable().optional(),
+});
 
-  // 【新增】狀態 1：用於儲存選中的檔案名稱 (顯示英文訊息)
-  const [selectedFileName, setSelectedFileName] = useState("No file chosen");
+const SurgerySchema = z.object({
+  id: z.number(),
+  scheduledAt: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  status: z.string(),
+  doctor: z.object({ id: z.number(), name: z.string() }).optional(),
+  guideline: z.object({
+    id: z.number(),
+    name: z.string(),
+    items: z.array(GuidelineItemSchema),
+  }).nullable().optional(),
+});
+const ResponseSchema = z.object({ surgeries: z.array(SurgerySchema) });
+type Surgery = z.infer<typeof SurgerySchema>;
 
-  // 【重要：修正您錯誤的地方】新增狀態：用於儲存手動輸入的藥丸資訊
-  const [pillWords, setPillWords] = useState(''); // <-- 這裡必須定義
-  const [pillColor, setPillColor] = useState(''); // <-- 這裡必須定義
-  const [pillShape, setPillShape] = useState(''); // <-- 這裡必須定義
+const MeSchema = z.object({
+  user: z.object({
+    id: z.number(),
+    name: z.string(),
+    role: z.enum(["doctor", "patient"]),
+  }),
+});
+type Me = z.infer<typeof MeSchema>["user"];
 
-  // 示例病人基本信息
-  const patientInfo = {
-    name: "Emily Johnson",
-    dob: "1985 年 3 月 15 日",
-    mrn: "12345678", // 待顯示
-    role: "Patient",
-  };
+export default function PatientPage() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [surgeries, setSurgeries] = useState<Surgery[]>([]);
+  const [me, setMe] = useState<Me | null>(null);
 
-  // 状态：用于控制下拉菜单的显示/隐藏
-  const toggleProfile = () => {
-    setIsProfileOpen(!isProfileOpen);
-  };
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // 1) 取得目前登入者
+        const meRes = await fetch("/api/auth/me", {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!meRes.ok) {
+          let msg = `HTTP ${meRes.status}`;
+          try {
+            const j = await meRes.json();
+            if (j?.error) msg = j.error;
+          } catch {}
+          throw new Error(msg);
+        }
+        const meData = await meRes.json();
+        const meParsed = MeSchema.safeParse(meData);
+        if (!meParsed.success) throw new Error("Unexpected me response");
+        if (mounted) setMe(meParsed.data.user);
 
-  // *** isOverlayOpen(新增) 狀態 2：用於控制全屏覆蓋層的顯示/隱藏 ***
-  const [isOverlayOpen , setIsOverlayOpen] = useState(false); // <-- 這行很重要
-
-  // *** 切换全屏覆蓋層的函数 ***
-  const toggleOverlay = () => { // <-- 這是您程式碼中缺少的定義
-    setIsOverlayOpen(!isOverlayOpen);
-  };
-
-  // 處理檔案變化的函數：當用戶選擇檔案時會調用此函式
-  const handleFileChange = (event) => { 
-    const file = event.target.files[0]; // 獲取用戶選擇的第一個檔案
-
-    if (file) {
-      // 如果選擇了檔案，將其名稱設定為 selectedFileName 狀態
-      setSelectedFileName(file.name); 
-    } else {
-      // 如果沒有選擇檔案（例如點擊了取消），重置為預設英文訊息
-      setSelectedFileName("No file chosen");
-    }
-  };
+        // 2) 取得病患手術
+        const res = await fetch("/api/patients/surgeries", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        if (!res.ok) {
+          let msg = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.error) msg = j.error;
+          } catch {}
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        const parsed = ResponseSchema.safeParse(data);
+        if (!parsed.success) throw new Error("Unexpected surgeries response");
+        if (mounted) setSurgeries(parsed.data.surgeries);
+      } catch (e) {
+        if (mounted) setError(e instanceof Error ? e.message : "Network error");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-100">
-      
-      {/* --- 標題欄--- */}
-      <header className="w-full p-4 flex items-center shadow-md"
-    style={{ backgroundColor: '#1D4C6F' }}>
-        {/* Hackathon Logo */}
-        <div className="flex-none mt-[-30px] ml-[-5px]">
-            <h1 
-        className="text-xl font-serif italic font-bold tracking-widest opacity-35"
-        style={{ color: 'white' }}>Hackathon</h1>
-        </div>
+    <main className="min-h-svh grid place-items-center p-6">
+      <div className="w-full max-w-2xl space-y-4">
+        <h1 className="text-2xl font-semibold">My Surgeries</h1>
 
-        {/* 中间 */}
-        <div className="absolute left-1/2 transform -translate-x-1/2">
-            <p className="text-4xl font-serif italic font-bold text-white tracking-widest">
-                {patientInfo.name}
-            </p>
-        </div>
+        {loading && <div className="text-sm text-neutral-600">Loading…</div>}
+        {error && <div className="text-sm text-red-600">❌ {error}</div>}
 
-        {/* --- 右侧用户图标及下拉菜单容器 --- */}
-        <div className="relative ml-auto">
-          <button 
-            onClick={toggleProfile}
-            // 【修改 1】：将 hover 颜色改为 bg-blue-100，使其更浅，与 Banner 背景更协调
-            className="p-2 rounded-full hover:bg-white/10 transition-colors"
-            aria-label="Toggle Patient Profile"
-          >
-            {/* 【修改 2】：移除 text-blue-300，使用内联样式设置自定义颜色 */}
-            <User 
-                className="h-8 w-8 cursor-pointer"
-                style={{ color: 'white' }}
-            />
-          </button>
+        {!loading && !error && (
+          <div className="border rounded p-4 space-y-4">
+            <h3 className="font-medium">Surgeries ({surgeries.length})</h3>
 
-          {/* 下拉菜单 (Dropdown Content) */}
-          {isProfileOpen && (
-            <div className="absolute right-0 mt-3 w-72 bg-white rounded-lg shadow-xl py-3 z-10 border border-gray-200">
-              <div className="px-4 pb-2 border-b">
-                <h3 className="text-lg font-bold text-gray-900">{patientInfo.name}</h3>
-                <p className="text-xs text-gray-500">UserId: {patientInfo.mrn}</p>
-              </div>
-              <div className="p-4 text-sm text-gray-700 space-y-2">
-                <div className="flex items-center">
-                  <Calendar className="h-4 w-4 mr-2 text-gray-400" />
-                  Birthday: {patientInfo.dob}
-                </div>
-                <div className="flex items-center">
-                  <Tag className="h-4 w-4 mr-2 text-gray-400" />
-                  Role: {patientInfo.role}
-                  
-                </div>
-                {/* 您可以在这里添加更多基本信息 */}
-              </div>
-              <div className="pt-2 border-t text-center">
-                <button className="text-sm text-indigo-600 hover:text-indigo-800 transition-colors">
-                  Log out
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </header>
+            {surgeries.length === 0 ? (
+              <div className="text-sm text-neutral-600">No surgeries yet.</div>
+            ) : (
+              <ul className="space-y-4">
+                {surgeries.map((s) => (
+                  <li key={s.id} className="space-y-2">
+                    <div className="font-medium">
+                      {s.status}
+                      {s.scheduledAt ? ` — ${new Date(s.scheduledAt).toLocaleString()}` : ""}
+                      {s.location ? ` — ${s.location}` : ""}
+                      {s.doctor ? ` — Dr. ${s.doctor.name}` : ""}
+                    </div>
 
-      {/* --- 中间主要内容框架 (Summary Content) --- */}
-      <main className="flex-grow bg-white p-8 shadow-inner">
-        <div className="max-w-4xl mx-auto">
-          {/* 这里是 Summary 的主体内容，为了简洁，使用占位符，但您可以使用您之前完整的表格代码替换这里 */}
-          <h2 className="text-3xl font-bold text-center mt-[-1.7rem] mb-2" style={{ color: '#1D4C6F' }}>
+                    {s.guideline ? (
+                      <div className="rounded border p-3">
+                        <div className="font-semibold">
+                          Guideline: {s.guideline.name}{" "}
+                          <span className="text-xs text-neutral-500">#{s.guideline.id}</span>
+                        </div>
 
-            Presurgical Optimization Summary
-          </h2>
-
-          <div className="space-y-4">
-            <h3 className="text-xl font-semibold" style={{ color: '#1D4C6F'}}>Patient Information Placeholder</h3>
-            <div className="h-20 bg-white rounded p-4 border" style={{ borderColor: '#1D4C6F' }}>
-              <p>Patient Information Placeholder</p>
-            </div>
-
-            <h3 className="text-xl font-semibold" style={{ color: '#1D4C6F' }}>Preoperative Testing</h3>
-            <div className="h-40 bg-white rounded p-4 border" style={{ borderColor: '#1D4C6F' }}>
-            </div>
-            
-            <h3 className="text-xl font-semibold" style={{ color: '#1D4C6F' }}>Medication Instructions</h3>
-            <div className="h-32 bg-white rounded p-4 border" style={{ borderColor: '#1D4C6F' }}>
-              <p>Table content placeholder...</p>
-            </div >
+                        {s.guideline.items.length > 0 ? (
+                          <ul className="mt-2 space-y-2">
+                            {s.guideline.items.map((gi) => (
+                              <li key={gi.id} className="border rounded p-2">
+                                <div className="font-medium">
+                                  {gi.title}
+                                  {gi.itemKey ? (
+                                    <span className="ml-2 text-xs text-neutral-500">({gi.itemKey})</span>
+                                  ) : null}
+                                </div>
+                                {gi.description ? (
+                                  <div className="text-sm text-neutral-700">{gi.description}</div>
+                                ) : null}
+                                <div className="text-xs text-neutral-500">
+                                  {gi.type ? `type: ${gi.type}` : ""}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <div className="text-sm text-neutral-600 mt-1">
+                            No items in this guideline.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-neutral-600">No guideline attached.</div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
+        )}
+      </div>
 
-        </div>
-      </main>
-
-    {/* =================================================== */}
-    {/* *** 1. 右下角的浮動圓形按鈕 (Pill Instruction Button) *** */}
-    {/* =================================================== */}
-    <DrugRecognitionLauncher userId={105} />
-    </div>
+      {/* 等 me 載好再掛子元件，避免 undefined */}
+      {me && <DrugRecognitionLauncher userId={me.id} />}
+    </main>
   );
 }
