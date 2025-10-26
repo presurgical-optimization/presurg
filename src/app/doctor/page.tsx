@@ -110,7 +110,21 @@ export type UiPatient = {
   note?: string | null;
   surgeries: UiSurgery[];
 };
+ 
+const RawSurgerySchema = z.object({
+  id: z.number(),
+  patientId: z.number(),
+  status: z.string(),
+  // ... 其他欄位
+  patient: z.object({ id: z.number(), name: z.string(), ssn: z.string() }),
+  guideline: z.object({ id: z.number(), name: z.string() }),
+  // ... 其他欄位
+}).passthrough(); // 使用 passthrough 以免遺漏欄位導致驗證失敗
 
+const RawApiSchema = z.object({
+  surgeries: z.array(RawSurgerySchema),
+});
+export type RawApiResponse = z.infer<typeof RawApiSchema>;
 /* ------------------------- Utils ------------------------- */
 const API_URL = "/api/doctor"; // src/app/api/doctor/route.ts
 const FALLBACK_DOCTOR = { name: "Dr. Amelia Carter", id: "D0001" };
@@ -180,41 +194,84 @@ export default function DoctorViewPage() {
   }, [router]);
 
   // Fetch patients & surgeries
+  
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch(API_URL, { credentials: "include", cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const raw = await res.json();
-        const parsed = ApiSchema.safeParse(raw);
-        if (!parsed.success) throw new Error("Unexpected /api/doctor response");
+        
+        // ❌ 移除或修改：ApiSchema.safeParse(raw)
+        // ✅ 使用新的 Schema (RawApiSchema) 來驗證扁平的手術列表
+        const parsed = RawApiSchema.safeParse(raw); 
+        if (!parsed.success) {
+            console.error("API Response Parsing Error:", parsed.error);
+            throw new Error("Unexpected /api/doctor response structure.");
+        }
 
-        const api: ApiResponse = parsed.data;
-        const uiPatients: UiPatient[] = api.data.map((p) => ({
-          id: p.id,
-          name: p.name,
-          dob: p.dob ?? null,
-          mrn: null,
-          patient_id: null,
-          note: null,
-          surgeries: p.surgeries.map((s, idx) => ({
+        const api: RawApiResponse = parsed.data; // 注意：這裡的類型從 ApiResponse 變為 RawApiResponse
+
+        // 1. 按患者 ID 分組手術
+        const patientsMap = new Map<number, UiPatient>();
+
+        api.surgeries.forEach((s) => {
+          const patientId = s.patient.id;
+          
+          // 確保每個手術都有一個初始版本和歷史版本（儘管它們是空的或佔位符）
+          // ⚠️ 注意: latestVersion 和 history 數據是缺失的，必須使用**佔位符**
+          const placeholderVersion: UiVersion = {
+             id: 0, // 佔位 ID
+             versionNo: 1, 
+             createdAt: new Date().toISOString(),
+             author: { id: s.doctorId as number , name: 'System/Unknown' }, 
+             instructions: [],
+          };
+
+
+          // 轉換手術數據到 UiSurgery 格式
+          const uiSurgery: UiSurgery = {
             id: s.id,
-            index: idx + 1,
+            // 由於這裡不再是單個患者的陣列，idx 無法準確代表索引，但我們仍可使用一個序列號
+            index: s.id, // 使用 id 作為臨時 index，或在最後再修正
             status: s.status,
-            guideline: { name: s.guideline.name, description: s.guideline.description ?? null },
-            latestVersion: {
-              id: s.latestVersion.id,
-              versionNo: s.latestVersion.versionNo,
-              createdAt: s.latestVersion.createdAt,
-              author: s.latestVersion.author,
-              instructions: s.latestVersion.instructions,
+            guideline: { 
+                name: s.guideline.name, 
+                // 由於原始 API 響應沒有 description，我們必須使用 null
+                description: null 
             },
-            versions: s.history.slice().sort((a, b) => a.versionNo - b.versionNo),
-          })),
-        }));
+            latestVersion: placeholderVersion,
+            versions: [placeholderVersion], // 用佔位符創建一個單一的歷史版本
+          };
+
+          if (!patientsMap.has(patientId)) {
+            // 如果是新患者，則創建新的 UiPatient 項目
+            patientsMap.set(patientId, {
+              id: patientId,
+              name: s.patient.name,
+              dob: null, // 原始數據沒有 dob，設為 null
+              mrn: null, // 硬編碼
+              patient_id: null, // 硬編碼
+              note: null, // 硬編碼
+              surgeries: [uiSurgery],
+            });
+          } else {
+            // 如果患者已存在，則將手術加入其列表
+            patientsMap.get(patientId)!.surgeries.push(uiSurgery);
+          }
+        });
+
+        // 2. 轉換 Map 為最終的 UiPatient[] 陣列
+        const uiPatients: UiPatient[] = Array.from(patientsMap.values()).map(p => {
+             // 修正 surgeries 陣列中的 index 欄位
+             p.surgeries = p.surgeries.map((s, idx) => ({ ...s, index: idx + 1 }));
+             return p;
+        });
+
 
         setPatientList(uiPatients);
         if (uiPatients.length > 0) setSelectedPatient(uiPatients[0]);
+
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
       }

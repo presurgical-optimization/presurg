@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
 
     // Step 2: Use versionIds to find SurgeryPlanVersion and pick medication instructions
-    const versions = await prisma.surgeryPlanVersion.findMany({
+    const versions = await prisma.SurgeryPlanVersion.findMany({
         where: { id: { in: versionIds } },
         select: { id: true, instructions: true },
     });

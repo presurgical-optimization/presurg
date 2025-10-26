@@ -143,6 +143,17 @@ export default function DrugRecognitionLauncher({ userId }: { userId: number }) 
                 Please click or drag to upload a drug image
               </p>
 
+              {/* 📷 新增一個專門用於開啟相機的隱藏 input */}
+              <input
+                id="drug-camera"
+                type="file"
+                accept="image/*"
+                capture="environment" // 這個屬性告訴瀏覽器優先使用後置鏡頭
+                className="hidden"
+                onChange={handleFileChange}
+              />
+
+              {/* 🖼️ 原始的檔案選擇 input 保持不變 */}
               <input
                 id="drug-upload"
                 type="file"
@@ -152,9 +163,19 @@ export default function DrugRecognitionLauncher({ userId }: { userId: number }) 
               />
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                {/* 📷 新增一個與 drug-camera 綁定的 label 作為「Open Camera」按鈕 */}
+                <label
+                  htmlFor="drug-camera"
+                  className="cursor-pointer px-4 py-2 rounded-md text-white font-semibold hover:brightness-110 transition"
+                  style={{ backgroundColor: PRIMARY_COLOR }}
+                >
+                  Open Camera
+                </label>
+                
+                {/* 🖼️ 原始的「Choose File」按鈕 */}
                 <label
                   htmlFor="drug-upload"
-                  className="cursor-pointer px-4 py-2 rounded-md text-white font-semibold"
+                  className="cursor-pointer px-4 py-2 rounded-md text-white font-semibold hover:brightness-110 transition"
                   style={{ backgroundColor: PRIMARY_COLOR }}
                 >
                   Choose File
