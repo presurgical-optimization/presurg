@@ -1,345 +1,242 @@
-# Presurgical Optimization Platform (Hackathon Prototype) — Technical Deep Dive
+# Presurgical Optimization Platform (UCI MSWE 2025 Hackathon)
 
-A full-stack prototype that demonstrates:
-1) **Versioned perioperative plans** stored as structured JSON (PostgreSQL + Prisma)  
-2) **LLM + LangChain structured output** to support reliable automation (not free-form text)  
-3) **Event-driven updates** (Socket.IO) so the doctor dashboard refreshes when guidelines change  
-4) **Simple role-based auth** via in-memory sessions (hackathon-friendly)
+We are **Presurgical Optimization Platform**, a hackathon prototype focused on **backend system design, LLM-assisted structured extraction, and real-time clinical workflow updates**.
 
-> ⚠️ Scope note: This is a hackathon prototype. It focuses on backend data modeling + system workflows rather than production-grade compliance/security.
+This document is written by **Carrie Chang**.
 
----
-
-## 1. Tech Stack
-
-### Core
-- **Next.js 16 (App Router)** + React 19
-- **PostgreSQL**
-- **Prisma ORM**
-- **Zod** (runtime schema validation)
-- **Socket.IO** (real-time updates)
-- **OpenAI + LangChain** (structured extraction)
-
-### Relevant Dependencies (from `package.json`)
-- `@langchain/openai`, `@langchain/core`, `langchain`
-- `socket.io`, `socket.io-client`
-- `zod`, `file-type`
-- `@prisma/client`, `prisma`
+> ⚠️ This project is a hackathon prototype for system design demonstration.  
+> It is **NOT** intended for real-world medical use and provides **no medical advice**.
 
 ---
 
-## 2. Repository Structure (Important Files)
+## Our Team
+
+- Carrie Chang [@Tsu-Yu](https://github.com/Tsu-Yu)
+- Carol Yeh [@Carolyehhh](https://github.com/Carolyehhh)
+- Shih-Yuan Huang [@shihyunhuang](https://github.com/shihyunhuang)
+- I-Hsuan Chiang [@J-ihsuan](https://github.com/J-ihsuan)
+- Pete Chen [@petechentw](https://github.com/petechentw)
+---
+
+## Table of Contents
+
+- [Our Team](#our-team)
+- [Table of Contents](#table-of-contents)
+- [Project Overview](#project-overview)
+- [System Architecture](#system-architecture)
+- [Project Structure](#project-structure)
+- [Core Technical Design](#core-technical-design)
+  - [Data Modeling & Versioning](#data-modeling--versioning)
+  - [LLM Integration (OpenAI + LangChain)](#llm-integration-openai--langchain)
+  - [Real-time Update (WebSocket)](#real-time-update-websocket)
+- [How to Run Locally](#how-to-run-locally)
+- [For Developers](#for-developers)
+  - [Software Requirements](#software-requirements)
+  - [Developer Tools](#developer-tools)
+- [Limitations & Notes](#limitations--notes)
+- [Future Improvements](#future-improvements)
+
+---
+
+## Project Overview
+
+**Presurgical Optimization Platform** is a full-stack web application designed to explore how perioperative clinical workflows can be modeled as:
+
+- **Versioned backend data**
+- **Structured, machine-readable rules**
+- **Event-driven UI updates**
+
+Instead of treating guidelines as static text, this system treats them as **versioned JSON-based instructions** that can be:
+- audited
+- updated
+- published
+- consumed by both humans and machines
+
+---
+
+## System Architecture
+
+```
+
+┌──────────────┐
+│ Doctor UI    │◀──── WebSocket (guideline:updated)
+└──────┬───────┘
+│ REST APIs
+┌──────▼───────┐
+│ Next.js API  │
+│ (Node.js)    │
+├──────┬───────┤
+│ Prisma ORM   │
+│ PostgreSQL  │
+└──────┬───────┘
+│
+┌──────▼────────────────┐
+│ OpenAI + LangChain    │
+│ Structured JSON Output│
+└───────────────────────┘
+
+```
+
+---
+
+## Project Structure
+
+(Without: `node_modules`, `.env`, `*.lock`)
 
 ```
 
 prisma/
-schema.prisma                      # Data model (users, surgeries, versioning, LLM audit logs)
+└─ schema.prisma              # Data model & versioning
 
 src/
-app/
-doctor/page.tsx                  # Doctor dashboard (uses Zod parsing + supports refresh)
-patient/page.tsx                 # Patient view (fetches published plan as guideline items)
-
-```
-api/
-  auth/
-    login/route.ts               # POST login -> sets session cookie
-    me/route.ts                  # GET current user
-    logout/route.ts              # POST logout -> deletes session cookie
-
-  doctor/route.ts                # Doctor API -> returns patients + surgeries + plan version history
-  patients/surgeries/route.ts    # Patient API -> returns surgeries w/ published plan mapped to items
-
-  guidelines/route.ts            # GET list; POST create guideline + emit socket event
-  guidelines/search/route.ts     # Search endpoint for guidelines
-  openAI/route.ts                # LLM route: image + hints -> structured JSON decision + DB log
-
-  socket.ts                      # Socket server init (see WebSocket notes below)
-```
-
-lib/
-prisma.ts                        # PrismaClient singleton
-session.ts                       # in-memory session store (hackathon)
-auth.ts                          # requireAuth/requireRole via cookie sid
-socket.ts                        # Socket.IO singleton + init/get
-useGuidelineSocket.ts            # client hook: connect + listen "guideline:updated"
+├─ app/
+│   ├─ api/
+│   │   ├─ guidelines/        # Guideline CRUD + socket emit
+│   │   ├─ doctor/            # Doctor data aggregation API
+│   │   ├─ patients/          # Patient-facing APIs
+│   │   ├─ openAI/            # LLM structured extraction
+│   │
+│   ├─ doctor/page.tsx        # Doctor dashboard (client)
+│   ├─ patient/page.tsx       # Patient view
+│
+├─ lib/
+│   ├─ prisma.ts              # Prisma client singleton
+│   ├─ auth.ts                # Role-based auth helpers
+│   ├─ session.ts             # In-memory session store
+│   ├─ socket.ts              # Socket.IO server singleton
+│   ├─ useGuidelineSocket.ts  # Client WebSocket hook
+│
+├─ pages/
+│   └─ api/socket.ts          # Socket.IO server initialization
 
 ````
 
 ---
 
-## 3. Domain Model & Why It’s Designed This Way
+## Core Technical Design
 
-### 3.1 High-level concepts
-- **User** has role: `doctor | patient`
-- **Surgery** belongs to a patient and a doctor
-- **SurgeryPlanVersion** stores **instructions as JSON** (JSONB in Postgres)
-- Each surgery has a pointer to the **currentPublishedVersion** as a patient-facing “single source of truth”
-- **LlmExtractionRun** logs each LLM run for traceability
+### Data Modeling & Versioning
 
-### 3.2 Prisma models (key design)
-From `prisma/schema.prisma`:
+- Each **Surgery** can have multiple **SurgeryPlanVersions**
+- Only one version is marked as **published** and exposed to patients
+- Historical versions are preserved for traceability
 
-- `Surgery.currentPublishedVersionId` is **unique**, forming a 1:1 relation to a plan version.
-- `SurgeryPlanVersion.instructions` is a JSON blob (intentionally), because perioperative instructions are diverse and evolve quickly.
-- `@@unique([surgeryId, versionNo])` ensures plan version numbers are stable per surgery.
-- `LlmExtractionRun` stores:
-  - `inputJson` (metadata + user meds list + hints)
-  - `outputJson` (validated structured result)
-  - `status` + `error`
-
-This is the "regulated systems mindset":
-- immutable-ish history (versions)
-- stable published pointer (current plan)
-- auditable automation (LLM runs)
+Key ideas:
+- `currentPublishedVersionId` acts as a **single source of truth**
+- Instructions are stored as **JSON**, not rigid tables, to support evolving clinical logic
 
 ---
 
-## 4. Authentication (Hackathon-Friendly)
+### LLM Integration (OpenAI + LangChain)
 
-### 4.1 Session store
-This project uses a very simple in-memory session store:
+This project intentionally avoids free-form AI responses.
 
-- `src/lib/session.ts` stores sessions in a `Map<string, SessionData>`
-- `src/lib/auth.ts` reads cookie `sid` and resolves to `{ userId, role }`
+**Why LangChain?**
+- Enforces **schema-validated outputs**
+- Enables automation and downstream processing
+- Prevents “hallucinated” fields
 
-**Trade-offs (intentional for hackathon):**
-- Restart server -> sessions wiped
-- Not safe for multi-instance deployment
-- No token rotation, CSRF strategy, etc.
+Flow:
+1. Aggregate patient medication instructions from DB
+2. Accept pill image + user hints
+3. Send to OpenAI via LangChain
+4. Validate output against strict JSON schema
+5. Persist run metadata for auditability
 
-### 4.2 Login flow
-- `POST /api/auth/login` with `{ ssn, dob }`
-- Server sets `sid` cookie (`httpOnly`, `sameSite=lax`)
-- Frontend uses `GET /api/auth/me` to check current user role and route them
-
----
-
-## 5. Core API Endpoints (Backend Contracts)
-
-### 5.1 Doctor dashboard data
-**GET `/api/doctor`** (`src/app/api/doctor/route.ts`)
-
-Returns patients with surgeries, including plan versions:
-- selects patient users
-- for each surgery includes:
-  - guideline name/description
-  - versions sorted by `versionNo`
-- response is reshaped into:
-  - `latestVersion` = last element
-  - `history` = full list
-
-This supports UI:
-- show latest instructions
-- allow “History” modal view
+All LLM runs are logged with:
+- input metadata
+- output JSON
+- success / error state
 
 ---
 
-### 5.2 Patient surgeries + published plan mapping
-**GET `/api/patients/surgeries`** (`src/app/api/patients/surgeries/route.ts`)
+### Real-time Update (WebSocket)
 
-Important behavior:
-- requires role `patient`
-- fetches each surgery + `currentPublishedVersion.instructions`
-- maps `instructions[]` -> `guideline.items[]` using a minimal schema:
+- **Socket.IO** is used for event-driven updates
+- When a guideline is created or updated:
+  - backend emits `guideline:updated`
+  - doctor dashboard automatically refreshes data
 
-The UI currently expects guideline items like:
-- `{ id, title, description, itemKey, type, window, appliesIf }`
-
-But your instructions JSON can contain richer medical fields (dosage, max_dose, indications, etc.).  
-So the endpoint intentionally **projects only what the UI needs**, while keeping JSON extensible for future.
+This avoids manual refresh and demonstrates:
+- backend-driven UI synchronization
+- decoupled, event-based system design
 
 ---
 
-### 5.3 Guidelines CRUD + real-time notification
-**GET `/api/guidelines`**: list guidelines (doctor only)  
-**POST `/api/guidelines`**: create guideline (doctor only) + emit socket event
+## How to Run Locally
 
-In `src/app/api/guidelines/route.ts`:
-- `prisma.surgeryGuideline.create(...)`
-- then emits:
-  - `io?.to("guidelines").emit("guideline:updated", { action, guidelineId, updatedAt })`
+Clone the repository:
 
----
-
-## 6. Real-time Updates (Socket.IO)
-
-### 6.1 Client subscription
-`src/lib/useGuidelineSocket.ts`:
-- `fetch("/api/socket")` to initialize server
-- connects Socket.IO client using `path: "/api/socket"`
-- joins room `"guidelines"`
-- listens `"guideline:updated"` and triggers callback
-
-Expected usage in a page:
-```ts
-useGuidelineSocket(() => router.refresh());
+```bash
+git clone <your-repo-url>
+cd presurg
 ````
 
-### 6.2 Server initialization
-
-`src/lib/socket.ts`:
-
-* stores singleton `global.io`
-* initializes Socket.IO with:
-
-  * `path: "/api/socket"`
-  * CORS open (hackathon mode)
-
-`src/app/api/socket.ts` currently contains a **Pages Router style handler** (`NextApiRequest/NextApiResponse`) and references `res.socket.server`.
-
-#### ⚠️ Important Next.js note
-
-Socket.IO server initialization typically needs to live under:
-
-```
-src/pages/api/socket.ts
-```
-
-because it relies on `res.socket.server` (Node HTTP server), which is a **Pages Router API feature**.
-
-**Recommended fix (if you want this to run reliably):**
-
-* Move file:
-
-  * from `src/app/api/socket.ts`
-  * to `src/pages/api/socket.ts`
-
-and keep its content as-is.
-
-If you keep it under `src/app/api/socket.ts`, it may not behave consistently depending on Next.js runtime behavior.
-
----
-
-## 7. LLM Integration (OpenAI + LangChain Structured Output)
-
-### 7.1 What this route does
-
-**POST `/api/openAI`** (`src/app/api/openAI/route.ts`) processes:
-
-Inputs (multipart/form-data):
-
-* `userId`
-* `image` (pill image)
-* optional hints: `imprint`, `color`, `shape`
-
-Server steps:
-
-1. Query surgeries for the patient (by `patientId = userId`)
-2. Resolve `currentPublishedVersionId` list
-3. Load each `SurgeryPlanVersion.instructions` JSON
-4. Extract medication instructions (type === `"medication"`) to build `user_med_list`
-5. Parse image mimetype using `file-type`
-6. Invoke OpenAI through LangChain with:
-
-   * system prompt (“never provide medical advice”)
-   * content: JSON + image (base64)
-7. Enforce **schema-validated JSON output** using Zod
-
-### 7.2 Why LangChain is used here (vs raw OpenAI SDK)
-
-The key need is **reliable structured data**:
-
-* downstream automation depends on stable keys + types
-* avoids “model returns random text / missing fields”
-
-Implementation detail:
-
-```ts
-const model = new ChatOpenAI({...}).withStructuredOutput(PillIdentifierSchema);
-const result = await model.invoke(messages);
-```
-
-Where `PillIdentifierSchema` ensures output includes:
-
-* `name`
-* `confidence_0to1` (0..1)
-* `is_on_user_list`
-* `matched_index`
-* `reason`
-
-If it fails schema validation, the route returns 502 and logs an ERROR run.
-
-### 7.3 Auditability: LLM run logs
-
-Every run is persisted to `LlmExtractionRun`:
-
-* success: inputJson + outputJson + status=SUCCESS
-* failure: inputJson + status=ERROR + error
-
-Data minimization:
-
-* stores **image metadata** but not raw base64 image in DB
-
----
-
-## 8. Local Setup
-
-### 8.1 Prerequisites
-
-* Node.js 18+ recommended
-* PostgreSQL running locally or hosted
-
-### 8.2 Environment variables
-
-Create `.env` at project root:
-
-```env
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DB
-OPENAI_API_KEY=your_openai_key
-```
-
-Note: `.env.example` currently doesn’t include `OPENAI_API_KEY` — add it for clarity.
-
-### 8.3 Install & run
+Install dependencies:
 
 ```bash
 npm install
+```
+
+Create `.env`:
+
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/db
+OPENAI_API_KEY=your_openai_key
+```
+
+Run database migration:
+
+```bash
 npx prisma migrate dev
+```
+
+Start development server:
+
+```bash
 npm run dev
 ```
 
 Open:
-
-* [http://localhost:3000](http://localhost:3000)
-
----
-
-## 9. Useful Debug Commands
-
-### Prisma
-
-```bash
-npx prisma studio
-```
-
-### Quick API checks
-
-Create guideline (doctor role required):
-
-```bash
-curl -X POST http://localhost:3000/api/guidelines \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Test guideline","description":"socket test"}'
-```
-
-If socket is correctly initialized, doctor page should refresh via `router.refresh()`.
+👉 [http://localhost:3000](http://localhost:3000)
 
 ---
 
-## 10. Known Limitations (Intentional / Hackathon)
+## For Developers
 
-* Auth sessions stored in memory (not Redis)
-* No production security hardening (rate limits, CSRF strategy, etc.)
-* Socket server route should be moved to Pages Router for reliability
-* LLM route is a prototype: “pill identification” is not medical-grade and does not provide advice
+### Software Requirements
+
+| Category | Tool               |
+| -------- | ------------------ |
+| Runtime  | Node.js 18+        |
+| Backend  | Next.js API Routes |
+| Database | PostgreSQL         |
+| ORM      | Prisma             |
+| AI       | OpenAI, LangChain  |
+| Realtime | Socket.IO          |
 
 ---
 
-## 11. Future Work (If Productizing)
+### Developer Tools
 
-* Replace in-memory sessions with Redis / DB sessions
-* Introduce RBAC at the query level (doctor sees only their patients)
-* Add test coverage for API contracts (Zod-based contract tests)
-* Expand instruction schema in patient endpoint to include dosage/indications fields in UI
-* Improve socket routing in Next.js with a stable server adapter for production
+* Visual Studio Code
+* Prisma Studio
+* Postman / curl
+* pgAdmin / TablePlus
+
+Recommended VSCode extensions:
+
+* Prisma
+* ESLint
+* Prettier
+* GitLens
+
+---
+
+## Future Improvements
+
+* Replace in-memory sessions with Redis
+* Add API contract tests
+* Expand instruction schema support in patient UI
+* Introduce fine-grained RBAC
+* Production-ready WebSocket adapter
