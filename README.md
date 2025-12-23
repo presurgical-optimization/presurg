@@ -4,7 +4,7 @@ We are **Presurgical Optimization Platform**, a hackathon prototype focused on *
 
 This document is written by **Carrie Chang**.
 
-> ⚠️ Scope note: This is a hackathon prototype. It focuses on backend data modeling + system workflows rather than production-grade compliance/security.
+> Scope note: This is a hackathon prototype. It focuses on backend data modeling + system workflows rather than production-grade compliance/security.
 
 
 ---
@@ -197,7 +197,7 @@ npm run dev
 ```
 
 Open:
-👉 [http://localhost:3000](http://localhost:3000)
+[http://localhost:3000](http://localhost:3000)
 
 ---
 
