@@ -1,0 +1,138 @@
+enum Role {
+  doctor
+  patient
+}
+
+enum PlanStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SurgeryStatus {
+  PLANNED
+  CONFIRMED
+  COMPLETED
+  CANCELED
+  POSTPONED
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id   Int      @id @default(autoincrement())
+  name String
+  role Role
+  ssn  String?  @unique @db.VarChar(11)
+  dob  DateTime @db.Date
+
+  doctorSurgeries      Surgery[]            @relation("DoctorSurgeries")
+  patientSurgeries     Surgery[]            @relation("PatientSurgeries")
+  authoredPlanVersions SurgeryPlanVersion[] @relation("PlanAuthor")
+
+  @@index([role, dob, ssn])
+}
+
+model SurgeryGuideline {
+  id          Int             @id @default(autoincrement())
+  name        String
+  description String?
+  items       GuidelineItem[]
+  surgeries   Surgery[]
+  createdAt   DateTime        @default(now())
+}
+
+model GuidelineItem {
+  id                 Int              @id @default(autoincrement())
+  surgeryGuidelineId Int
+  surgeryGuideline   SurgeryGuideline @relation(fields: [surgeryGuidelineId], references: [id])
+
+  title       String
+  description String?
+  itemKey     String?
+  type        String?
+  window      Json?
+  appliesIf   Json?
+
+  @@unique([surgeryGuidelineId, itemKey])
+}
+
+model Surgery {
+  id        Int  @id @default(autoincrement())
+  patientId Int
+  patient   User @relation("PatientSurgeries", fields: [patientId], references: [id])
+  doctorId  Int
+  doctor    User @relation("DoctorSurgeries", fields: [doctorId], references: [id])
+
+  guidelineId Int?
+  guideline   SurgeryGuideline? @relation(fields: [guidelineId], references: [id])
+
+  scheduledAt DateTime?
+  location    String?
+  status      SurgeryStatus @default(PLANNED)
+
+  currentPublishedVersionId Int?                @unique
+  currentPublishedVersion   SurgeryPlanVersion? @relation("CurrentPublished", fields: [currentPublishedVersionId], references: [id])
+
+  versions  SurgeryPlanVersion[]
+  createdAt DateTime             @default(now())
+
+  @@index([doctorId, scheduledAt])
+  @@index([patientId, scheduledAt])
+}
+
+model SurgeryPlanVersion {
+  id        Int     @id @default(autoincrement())
+  surgeryId Int
+  surgery   Surgery @relation(fields: [surgeryId], references: [id])
+
+  versionNo   Int
+  status      PlanStatus @default(DRAFT)
+  isPublished Boolean    @default(false)
+
+  basedOnGuidelineId Int?
+  basedOnVersionId   Int?
+
+  authorId Int?
+  author   User? @relation("PlanAuthor", fields: [authorId], references: [id])
+
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+
+  /// All instructions for this version live here as JSONB
+  /// Example: [{ itemKey, type, title, description, window, enabled, orderIndex }]
+  instructions Json
+
+  // back-relation to Surgery.currentPublishedVersion（1:1）
+  publishedForSurgery Surgery? @relation("CurrentPublished")
+
+  @@unique([surgeryId, versionNo])
+}
+
+// --------------------
+// Added for traceability / auditability
+// Stores each LLM extraction run's input/output as JSON.
+// --------------------
+model LlmExtractionRun {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  // Link to patient (we use patientId from your request's userId)
+  patientId Int?
+  patient   User?    @relation(fields: [patientId], references: [id])
+
+  model     String
+  inputJson Json
+  outputJson Json
+  status    String   @default("SUCCESS") // SUCCESS | ERROR
+  error     String?
+
+  @@index([patientId, createdAt])
+}
