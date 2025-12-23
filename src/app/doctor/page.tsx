@@ -1,10 +1,11 @@
 // app/doctor/page.tsx — Uses real /api/doctor JSON; only Instructions editable; History kept
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 import { User, LogOut, ChevronDown, ChevronUp, Lock } from "lucide-react";
+import { useGuidelineSocket } from "@/lib/useGuidelineSocket";
 
 /* ------------------------- Auth schema (unchanged) ------------------------- */
 const MeSchema = z.object({
@@ -21,7 +22,6 @@ type Me = z.infer<typeof MeSchema>["user"];
 const InstructionSchema = z
   .object({
     type: z.string(),
-    title: z.string().optional(),
     // dosage 可能是字串或物件（key 為 string，值任意）
     dosage: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
     // window 是任意 key/value 的物件
@@ -29,6 +29,7 @@ const InstructionSchema = z
     enabled: z.boolean().optional(),
     itemKey: z.string().optional(),
     orderIndex: z.number().optional(),
+    title: z.string().optional(),
     description: z.string().optional(),
     indications: z.array(z.string()).optional(),
   })
@@ -163,7 +164,10 @@ export default function DoctorViewPage() {
       try {
         const res = await fetch("/api/auth/me", { credentials: "include", cache: "no-store" });
         if (!res.ok) {
-          if (res.status === 401) { router.push("/"); return; }
+          if (res.status === 401) {
+            router.push("/");
+            return;
+          }
           const j = await res.json().catch(() => ({}));
           throw new Error(j?.error ?? `HTTP ${res.status}`);
         }
@@ -171,7 +175,10 @@ export default function DoctorViewPage() {
         const parsed = MeSchema.safeParse(data);
         if (!parsed.success) throw new Error("Unexpected /api/auth/me response");
         const me = parsed.data.user;
-        if (me.role !== "doctor") { router.push("/"); return; }
+        if (me.role !== "doctor") {
+          router.push("/");
+          return;
+        }
         setDoctorInfo({ name: me.name, id: me.id });
       } catch (e) {
         setError(e instanceof Error ? e.message : "Network error");
@@ -179,53 +186,76 @@ export default function DoctorViewPage() {
     })();
   }, [router]);
 
-  // Fetch patients & surgeries
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(API_URL, { credentials: "include", cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const raw = await res.json();
-        const parsed = ApiSchema.safeParse(raw);
-        if (!parsed.success) throw new Error("Unexpected /api/doctor response");
+  // -------- WebSocket-friendly loader (reused by initial fetch + socket event) --------
+  const loadPatients = useCallback(async () => {
+    try {
+      setError(null);
+      const res = await fetch(API_URL, { credentials: "include", cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const raw = await res.json();
+      const parsed = ApiSchema.safeParse(raw);
+      if (!parsed.success) throw new Error("Unexpected /api/doctor response");
 
-        const api: ApiResponse = parsed.data;
-        const uiPatients: UiPatient[] = api.data.map((p) => ({
-          id: p.id,
-          name: p.name,
-          dob: p.dob ?? null,
-          mrn: null,
-          patient_id: null,
-          note: null,
-          surgeries: p.surgeries.map((s, idx) => ({
-            id: s.id,
-            index: idx + 1,
-            status: s.status,
-            guideline: { name: s.guideline.name, description: s.guideline.description ?? null },
-            latestVersion: {
-              id: s.latestVersion.id,
-              versionNo: s.latestVersion.versionNo,
-              createdAt: s.latestVersion.createdAt,
-              author: s.latestVersion.author,
-              instructions: s.latestVersion.instructions,
-            },
-            versions: s.history.slice().sort((a, b) => a.versionNo - b.versionNo),
-          })),
-        }));
+      const api: ApiResponse = parsed.data;
+      const uiPatients: UiPatient[] = api.data.map((p) => ({
+        id: p.id,
+        name: p.name,
+        dob: p.dob ?? null,
+        mrn: null,
+        patient_id: null,
+        note: null,
+        surgeries: p.surgeries.map((s, idx) => ({
+          id: s.id,
+          index: idx + 1,
+          status: s.status,
+          guideline: { name: s.guideline.name, description: s.guideline.description ?? null },
+          latestVersion: {
+            id: s.latestVersion.id,
+            versionNo: s.latestVersion.versionNo,
+            createdAt: s.latestVersion.createdAt,
+            author: s.latestVersion.author,
+            instructions: s.latestVersion.instructions,
+          },
+          versions: s.history.slice().sort((a, b) => a.versionNo - b.versionNo),
+        })),
+      }));
 
-        setPatientList(uiPatients);
-        if (uiPatients.length > 0) setSelectedPatient(uiPatients[0]);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Network error");
-      }
-    })();
+      setPatientList(uiPatients);
+
+      // keep selection if possible; otherwise pick first
+      setSelectedPatient((prev) => {
+        if (!prev) return uiPatients[0] ?? null;
+        const stillThere = uiPatients.find((p) => p.id === prev.id);
+        return stillThere ?? (uiPatients[0] ?? null);
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Network error");
+    }
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadPatients();
+  }, [loadPatients]);
+
+  // WebSocket: refresh when guideline changes are broadcast
+  const onGuidelineUpdated = useCallback(
+    (_payload: any) => {
+      // Re-fetch /api/doctor so the UI reflects latest guideline changes
+      loadPatients();
+    },
+    [loadPatients]
+  );
+
+  useGuidelineSocket(onGuidelineUpdated);
 
   const toggleProfile = () => setIsProfileOpen((v) => !v);
   const handlePatientHover = (patient: UiPatient) => setSelectedPatient(patient);
 
   const handleLogout = async () => {
-    try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }); } catch {}
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch {}
     router.push("/");
   };
 
@@ -244,7 +274,11 @@ export default function DoctorViewPage() {
         </div>
 
         <div className="relative ml-auto">
-          <button onClick={toggleProfile} className="p-2 rounded-full hover:bg-white/10 transition-colors" aria-label="Toggle Doctor Profile">
+          <button
+            onClick={toggleProfile}
+            className="p-2 rounded-full hover:bg-white/10 transition-colors"
+            aria-label="Toggle Doctor Profile"
+          >
             <User className="h-8 w-8 cursor-pointer text-white" />
           </button>
 
@@ -255,7 +289,10 @@ export default function DoctorViewPage() {
                 <p className="text-xs text-gray-500">ID: {doctorInfo.id}</p>
               </div>
               <div className="pt-2 border-t text-center">
-                <button onClick={handleLogout} className="flex items-center justify-center w-full py-2 text-sm text-red-600 hover:bg-red-50 transition-colors">
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center justify-center w-full py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                >
                   <LogOut className="h-4 w-4 mr-2" />
                   Log out
                 </button>
@@ -279,7 +316,10 @@ export default function DoctorViewPage() {
               className={`w-full py-6 px-4 rounded-xl text-center transition-all duration-300 ease-in-out font-extrabold text-xl tracking-wider text-gray-800 ${
                 selectedPatient?.id === patient.id ? "bg-[#D0E6F0]" : "bg-[#EBF4F8]"
               }`}
-              style={{ boxShadow: "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.06)" }}
+              style={{
+                boxShadow:
+                  "0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -2px rgba(0,0,0,0.06)",
+              }}
             >
               {patient.name}
             </button>
@@ -288,7 +328,10 @@ export default function DoctorViewPage() {
 
         {/* Right: details */}
         <div className="w-4/5 pl-4">
-          <div className="w-full h-full p-8 rounded-xl shadow-2xl flex flex-col relative" style={{ backgroundColor: "white", border: "1px solid #cce8f5" }}>
+          <div
+            className="w-full h-full p-8 rounded-xl shadow-2xl flex flex-col relative"
+            style={{ backgroundColor: "white", border: "1px solid #cce8f5" }}
+          >
             {selectedPatient ? (
               <div className="text-gray-700">
                 <h2 className="text-2xl font-extrabold mb-1" style={{ color: "#1D4C6F" }}>
@@ -296,7 +339,9 @@ export default function DoctorViewPage() {
                 </h2>
 
                 <div className="text-base space-y-1 mb-6 text-gray-700">
-                  <p>DOB: <span className="font-semibold">{prettyDOB(selectedPatient.dob)}</span></p>
+                  <p>
+                    DOB: <span className="font-semibold">{prettyDOB(selectedPatient.dob)}</span>
+                  </p>
                 </div>
 
                 {selectedPatient.surgeries && selectedPatient.surgeries.length > 0 ? (
@@ -307,7 +352,9 @@ export default function DoctorViewPage() {
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center">
-                <p className="text-4xl font-extrabold opacity-50" style={{ color: "#1D4C6F" }}>Patient Info</p>
+                <p className="text-4xl font-extrabold opacity-50" style={{ color: "#1D4C6F" }}>
+                  Patient Info
+                </p>
                 <p className="mt-4 text-gray-500">將滑鼠移至左側病人姓名，以查看詳細資訊。</p>
               </div>
             )}
@@ -342,9 +389,8 @@ const EditableRow = ({
 
   const isLongText = (editedValue?.length ?? 0) > 80 || editedValue.includes("\n");
 
-  const handleTextChange = (
-    e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>
-  ) => setEditedValue(e.target.value);
+  const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) =>
+    setEditedValue(e.target.value);
 
   return (
     <div className="flex items-start bg-white hover:bg-gray-50 transition-colors py-3 px-4 border-b border-gray-200">
@@ -367,11 +413,8 @@ const EditableRow = ({
             />
           )
         ) : isInstructions ? (
-          <div
-            className="text-gray-700 leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: editedValue }}
-          />
-        ): (
+          <div className="text-gray-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: editedValue }} />
+        ) : (
           <span className="text-gray-700 whitespace-pre-wrap">{editedValue}</span>
         )}
       </div>
@@ -379,12 +422,24 @@ const EditableRow = ({
       <div className="w-28 flex flex-col justify-start items-end pt-1 space-y-2">
         {canEdit ? (
           isEditing ? (
-            <button onClick={handleSave} className="text-white bg-green-500 hover:bg-green-600 text-xs px-3 py-1 rounded">Save</button>
+            <button
+              onClick={handleSave}
+              className="text-white bg-green-500 hover:bg-green-600 text-xs px-3 py-1 rounded"
+            >
+              Save
+            </button>
           ) : (
-            <button onClick={() => setIsEditing(true)} className="text-gray-700 border border-gray-400 hover:bg-gray-200 text-xs px-3 py-1 rounded">Edit</button>
+            <button
+              onClick={() => setIsEditing(true)}
+              className="text-gray-700 border border-gray-400 hover:bg-gray-200 text-xs px-3 py-1 rounded"
+            >
+              Edit
+            </button>
           )
         ) : (
-          <div className="flex items-center text-gray-400 text-xs select-none"><Lock className="h-3.5 w-3.5 mr-1" /> Locked</div>
+          <div className="flex items-center text-gray-400 text-xs select-none">
+            <Lock className="h-3.5 w-3.5 mr-1" /> Locked
+          </div>
         )}
 
         {isInstructions && !isEditing && (
@@ -408,13 +463,14 @@ const SurgeryTable = ({ surgeries }: { surgeries: UiSurgery[] }) => {
   const [historyList, setHistoryList] = useState<UiVersion[]>([]);
 
   const toggleDetails = (index: number) => setExpandedIndex(expandedIndex === index ? null : index);
-  const openHistory = (versions: UiVersion[]) => { setHistoryList(versions); setIsHistoryOpen(true); };
+  const openHistory = (versions: UiVersion[]) => {
+    setHistoryList(versions);
+    setIsHistoryOpen(true);
+  };
 
   return (
     <div className="mt-8 text-base">
-      {isHistoryOpen && (
-        <HistoryModal versions={historyList} onClose={() => setIsHistoryOpen(false)} />
-      )}
+      {isHistoryOpen && <HistoryModal versions={historyList} onClose={() => setIsHistoryOpen(false)} />}
       <div className="text-sm font-light mb-2 text-gray-500">Table</div>
 
       <table className="min-w-full divide-y divide-gray-200 border-t border-gray-200">
@@ -429,12 +485,19 @@ const SurgeryTable = ({ surgeries }: { surgeries: UiSurgery[] }) => {
         <tbody className="bg-white divide-y divide-gray-200">
           {surgeries.map((s, idx) => (
             <React.Fragment key={s.id}>
-              <tr onClick={() => toggleDetails(idx)} className="cursor-pointer hover:bg-blue-50 transition-colors">
+              <tr
+                onClick={() => toggleDetails(idx)}
+                className="cursor-pointer hover:bg-blue-50 transition-colors"
+              >
                 <td className="px-4 py-3 font-medium text-gray-900 w-1/12">{s.index}</td>
                 <td className="px-6 py-3 text-gray-700 whitespace-nowrap w-3/12">{s.status}</td>
                 <td className="px-6 py-3 text-blue-800 font-medium flex justify-between items-center w-8/12">
                   <span>{s.guideline.name}</span>
-                  {expandedIndex === idx ? <ChevronUp className="h-4 w-4 text-gray-500" /> : <ChevronDown className="h-4 w-4 text-gray-500" />}
+                  {expandedIndex === idx ? (
+                    <ChevronUp className="h-4 w-4 text-gray-500" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-gray-500" />
+                  )}
                 </td>
               </tr>
 
@@ -443,10 +506,16 @@ const SurgeryTable = ({ surgeries }: { surgeries: UiSurgery[] }) => {
                   <td colSpan={3} className="p-0 bg-gray-50 text-base">
                     <div className="divide-y divide-gray-200 border border-gray-300">
                       <EditableRow columnName="1. Guideline Name:" initialValue={s.guideline.name} canEdit={false} />
-                      <EditableRow columnName="2. Guideline Description:" initialValue={s.guideline.description ?? ""} canEdit={false} />
+                      <EditableRow
+                        columnName="2. Guideline Description:"
+                        initialValue={s.guideline.description ?? ""}
+                        canEdit={false}
+                      />
                       <EditableRow
                         columnName="3. Latest Version:"
-                        initialValue={`v${s.latestVersion.versionNo} · ${new Date(s.latestVersion.createdAt).toLocaleString()} · ${s.latestVersion.author.name}`}
+                        initialValue={`v${s.latestVersion.versionNo} · ${new Date(
+                          s.latestVersion.createdAt
+                        ).toLocaleString()} · ${s.latestVersion.author.name}`}
                         canEdit={false}
                       />
                       {/* Only editable field */}
@@ -481,20 +550,30 @@ const HistoryModal = ({ versions, onClose }: { versions: UiVersion[]; onClose: (
         <h3 className="text-2xl font-bold mb-4 border-b pb-2 text-gray-800">Version History</h3>
 
         <div className="flex-grow overflow-y-auto p-4 border rounded-lg bg-gray-50 mb-4">
-          <p className="text-lg font-semibold mb-2">Version {current.versionNo} / {versions.length}</p>
-          <p className="text-sm text-gray-500 mb-4">Edited by {current.author.name} on {new Date(current.createdAt).toLocaleString()}</p>
+          <p className="text-lg font-semibold mb-2">
+            Version {current.versionNo} / {versions.length}
+          </p>
+          <p className="text-sm text-gray-500 mb-4">
+            Edited by {current.author.name} on {new Date(current.createdAt).toLocaleString()}
+          </p>
           <div className="text-gray-700 whitespace-pre-wrap border p-4 bg-white rounded-md min-h-[150px]">
             {formatInstructions(current.instructions)}
           </div>
         </div>
 
         <div className="flex justify-between items-center pt-2">
-          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-700">Close</button>
+          <button onClick={onClose} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-700">
+            Close
+          </button>
           <div className="flex items-center space-x-2">
             <button
               onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
               disabled={currentPage === 0}
-              className={`px-4 py-2 rounded transition-colors ${currentPage === 0 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-gray-400 text-white hover:bg-blue-900"}`}
+              className={`px-4 py-2 rounded transition-colors ${
+                currentPage === 0
+                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                  : "bg-gray-400 text-white hover:bg-blue-900"
+              }`}
             >
               Prev Ver.
             </button>
@@ -502,7 +581,11 @@ const HistoryModal = ({ versions, onClose }: { versions: UiVersion[]; onClose: (
               <button
                 onClick={() => setCurrentPage((p) => Math.min(versions.length - 1, p + 1))}
                 disabled={currentPage === versions.length - 1}
-                className={`px-4 py-2 rounded transition-colors ${currentPage === versions.length - 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "bg-gray-400 text-white hover:bg-blue-900"}`}
+                className={`px-4 py-2 rounded transition-colors ${
+                  currentPage === versions.length - 1
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                    : "bg-gray-400 text-white hover:bg-blue-900"
+                }`}
               >
                 Next Ver.
               </button>
