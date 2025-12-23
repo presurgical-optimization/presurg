@@ -78,7 +78,6 @@ model Surgery {
   location    String?
   status      SurgeryStatus @default(PLANNED)
 
-  // 病患端單一真相
   currentPublishedVersionId Int?                @unique
   currentPublishedVersion   SurgeryPlanVersion? @relation("CurrentPublished", fields: [currentPublishedVersionId], references: [id])
 
@@ -115,4 +114,25 @@ model SurgeryPlanVersion {
   publishedForSurgery Surgery? @relation("CurrentPublished")
 
   @@unique([surgeryId, versionNo])
+}
+
+// --------------------
+// Added for traceability / auditability
+// Stores each LLM extraction run's input/output as JSON.
+// --------------------
+model LlmExtractionRun {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+
+  // Link to patient (we use patientId from your request's userId)
+  patientId Int?
+  patient   User?    @relation(fields: [patientId], references: [id])
+
+  model     String
+  inputJson Json
+  outputJson Json
+  status    String   @default("SUCCESS") // SUCCESS | ERROR
+  error     String?
+
+  @@index([patientId, createdAt])
 }
