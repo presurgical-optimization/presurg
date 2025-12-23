@@ -4,8 +4,8 @@ We are **Presurgical Optimization Platform**, a hackathon prototype focused on *
 
 This document is written by **Carrie Chang**.
 
-> ⚠️ This project is a hackathon prototype for system design demonstration.  
-> It is **NOT** intended for real-world medical use and provides **no medical advice**.
+> ⚠️ Scope note: This is a hackathon prototype. It focuses on backend data modeling + system workflows rather than production-grade compliance/security.
+
 
 ---
 
@@ -33,7 +33,6 @@ This document is written by **Carrie Chang**.
 - [For Developers](#for-developers)
   - [Software Requirements](#software-requirements)
   - [Developer Tools](#developer-tools)
-- [Limitations & Notes](#limitations--notes)
 - [Future Improvements](#future-improvements)
 
 ---
@@ -168,7 +167,7 @@ This avoids manual refresh and demonstrates:
 Clone the repository:
 
 ```bash
-git clone <your-repo-url>
+git clone <this-repo-url>
 cd presurg
 ````
 
@@ -237,6 +236,3 @@ Recommended VSCode extensions:
 
 * Replace in-memory sessions with Redis
 * Add API contract tests
-* Expand instruction schema support in patient UI
-* Introduce fine-grained RBAC
-* Production-ready WebSocket adapter
